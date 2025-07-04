@@ -339,6 +339,12 @@ class AppController:
         face_landmarks = self.vision.get_face_landmarks(frame)
         # Get body bbox for gamma correction masking
         body_bbox = self.vision.get_body_bbox(frame)
+        # Debug: Print body bounding box info
+        if body_bbox:
+            bx, by, bw, bh = body_bbox
+            print(f"Body bbox: x={bx}, y={by}, w={bw}, h={bh}")
+        else:
+            print("No body bbox detected")
         # Get pose landmarks for rig model
         pose_landmarks = self.vision.get_pose_landmarks(frame)
         # Detect mood
@@ -382,13 +388,23 @@ class AppController:
             face_axes = (w//2, h_exp//2)
             cv2.ellipse(mask, face_center, face_axes, 0, 0, 360, (255,), -1)
             
-            # Add body to mask if detected with rounded edges
+            # Add body to mask if detected with arch shape (semicircle top + rectangle bottom)
             if body_bbox:
                 bx, by, bw, bh = body_bbox
-                # Create elliptical mask for body
-                body_center = (bx + bw//2, by + bh//2)
-                body_axes = (bw//2, bh//2)
-                cv2.ellipse(mask, body_center, body_axes, 0, 0, 360, (255,), -1)
+                
+                # Create arch-shaped mask for body
+                # Top half: semicircle
+                semicircle_center = (bx + bw//2, by + bh//4)  # Center of top half
+                semicircle_radius = min(bw//2, bh//4)  # Radius for semicircle
+                
+                # Draw semicircle (top half of ellipse)
+                cv2.ellipse(mask, semicircle_center, (semicircle_radius, semicircle_radius), 
+                           0, 0, 180, (255,), -1)  # 0-180 degrees for top half
+                
+                # Bottom half: rectangle
+                rect_y = by + bh//4  # Start from middle of body
+                rect_height = bh * 3//4  # Bottom 3/4 of body
+                cv2.rectangle(mask, (bx, rect_y), (bx + bw, by + bh), (255,), -1)
             
             # Apply Gaussian blur to the mask for smoother edges
             mask = cv2.GaussianBlur(mask, (21, 21), 0)
@@ -399,21 +415,31 @@ class AppController:
             # Apply gamma correction to the entire frame
             frame_gamma = self.apply_gamma(frame, gamma_val)
             
-            # Blend original and gamma-corrected frames using the mask
-            # This prevents color inversion at edges
+            # Create 3D mask for blending
             mask_3d = np.stack([mask_float] * 3, axis=2)
-            frame = (frame.astype(np.float32) * mask_3d + 
-                    frame_gamma.astype(np.float32) * (1 - mask_3d)).astype(np.uint8)
+            
+            # Apply manual brightness adjustment if set
+            brightness_target = self.gamma.pid.setpoint
+            if brightness_target != 120:  # If not at default
+                # Apply brightness adjustment to background only
+                frame_brightness = self.apply_brightness(frame, brightness_target)
+                # Blend brightness-adjusted background with original person
+                frame = (frame.astype(np.float32) * mask_3d + 
+                        frame_brightness.astype(np.float32) * (1 - mask_3d)).astype(np.uint8)
+            else:
+                # Blend original and gamma-corrected frames using the mask
+                # This prevents color inversion at edges
+                frame = (frame.astype(np.float32) * mask_3d + 
+                        frame_gamma.astype(np.float32) * (1 - mask_3d)).astype(np.uint8)
         else:
             # Apply gamma correction to entire frame when no face detected
             gamma_val = self.gamma.gamma  # Use current gamma value
             frame = self.apply_gamma(frame, gamma_val)
-        
-        # Apply manual brightness adjustment if set
-        brightness_target = self.gamma.pid.setpoint
-        if brightness_target != 120:  # If not at default
-            # Apply brightness adjustment
-            frame = self.apply_brightness(frame, brightness_target)
+            
+            # Apply manual brightness adjustment if set (to entire frame when no person detected)
+            brightness_target = self.gamma.pid.setpoint
+            if brightness_target != 120:  # If not at default
+                frame = self.apply_brightness(frame, brightness_target)
         
         # Privacy/anonymous mode
         anonymous_active = False
