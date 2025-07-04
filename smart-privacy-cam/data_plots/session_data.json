@@ -1,0 +1,26 @@
+{
+  "session_start": "2025-07-04T21:11:05.039708",
+  "session_end": "2025-07-04T21:12:38.825478",
+  "duration_seconds": 93.78577,
+  "total_frames": 518,
+  "faces_detected": 241,
+  "detection_rate": 46.52509652509653,
+  "mood_counts": {
+    "Sad?": 123,
+    "No Face Detected": 269,
+    "Surprised?": 15,
+    "Angry": 1,
+    "Happy": 1,
+    "Sad": 6,
+    "Happy?": 81,
+    "Surprised": 22
+  },
+  "privacy_mode_usage": {
+    "None": 199,
+    "Face Blur": 20,
+    "Anonymous": 3
+  },
+  "mic_mute_count": 0,
+  "mic_unmute_count": 518,
+  "average_fps": 5.512563366489394
+}
