@@ -159,34 +159,92 @@ class VisionSystem:
     """
     VisionSystem.get_body_bbox
     --------------------------
-    1. Get body landmarks and create bounding box
+    1. Get body landmarks and create comprehensive bounding box including lower torso
     2. Return body bounding box for gamma correction masking
     """
     def get_body_bbox(self, frame):
-        body_landmarks = self.get_body_landmarks(frame)
-        if body_landmarks:
-            points = np.array(body_landmarks)
-            x_min, y_min = np.min(points, axis=0)
-            x_max, y_max = np.max(points, axis=0)
-            
-            # Get frame dimensions
-            frame_height, frame_width = frame.shape[:2]
-            
-            # If the body extends near the bottom of the frame, extend the bounding box
-            # to include the full body area that would be cut off
-            bottom_threshold = frame_height * 0.8  # If body is in bottom 20% of frame
-            if y_max > bottom_threshold:
-                # Extend the bounding box to the bottom of the frame
-                y_max = frame_height
-            
-            # Ensure coordinates are within frame bounds
-            x_min = max(0, int(x_min))
-            y_min = max(0, int(y_min))
-            x_max = min(frame_width, int(x_max))
-            y_max = min(frame_height, int(y_max))
-            
-            return (x_min, y_min, x_max - x_min, y_max - y_min)
-        return None
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = self.pose.process(rgb)
+        h, w, _ = frame.shape
+        
+        pose_landmarks = getattr(results, "pose_landmarks", None)
+        if not pose_landmarks:
+            return None
+        
+        # MediaPipe Pose landmark indices for comprehensive body coverage
+        # Upper body: nose, shoulders, elbows, wrists
+        # Lower body: hips, knees, ankles
+        upper_body_indices = [0, 11, 12, 13, 14, 15, 16]  # Nose, shoulders, elbows, wrists
+        lower_body_indices = [23, 24, 25, 26, 27, 28, 29, 30, 31, 32]  # Hips, knees, ankles
+        
+        # Collect all relevant landmarks
+        all_landmarks = []
+        
+        # Add upper body landmarks
+        for idx in upper_body_indices:
+            if idx < len(pose_landmarks.landmark):
+                landmark = pose_landmarks.landmark[idx]
+                if landmark.visibility > 0.3:  # Lower threshold for better detection
+                    all_landmarks.append((int(landmark.x * w), int(landmark.y * h)))
+        
+        # Add lower body landmarks
+        lower_body_detected = False
+        for idx in lower_body_indices:
+            if idx < len(pose_landmarks.landmark):
+                landmark = pose_landmarks.landmark[idx]
+                if landmark.visibility > 0.3:  # Lower threshold for better detection
+                    all_landmarks.append((int(landmark.x * w), int(landmark.y * h)))
+                    lower_body_detected = True
+        
+        # Debug: Print landmark detection info
+        print(f"Total landmarks: {len(all_landmarks)}, Lower body detected: {lower_body_detected}")
+        
+        if not all_landmarks:
+            return None
+        
+        # Calculate bounding box from all landmarks
+        points = np.array(all_landmarks)
+        x_min, y_min = np.min(points, axis=0)
+        x_max, y_max = np.max(points, axis=0)
+        
+        # Get frame dimensions
+        frame_height, frame_width = frame.shape[:2]
+        
+        # Extend the bounding box to include more of the lower body
+        # If we have any lower body landmarks detected, extend downward
+        has_lower_body = False
+        for idx in lower_body_indices:
+            if idx < len(pose_landmarks.landmark):
+                if pose_landmarks.landmark[idx].visibility > 0.3:
+                    has_lower_body = True
+                    break
+        
+        if has_lower_body:
+            # Extend the bounding box to double its current height
+            # This ensures we capture the full torso including lower body
+            body_height = y_max - y_min
+            original_y_max = y_max
+            y_max = min(frame_height, int(y_min + body_height * 2))  # Double the height
+            print(f"Body height doubled: {body_height} -> {y_max - y_min}, y_max: {original_y_max} -> {y_max}")
+        else:
+            print("No lower body detected, keeping original height")
+        
+        # Additional extension if body is near bottom of frame
+        bottom_threshold = frame_height * 0.7  # If body is in bottom 30% of frame
+        if y_max > bottom_threshold:
+            # Extend the bounding box to the bottom of the frame
+            y_max = frame_height
+        
+        # Add some padding around the bounding box for better coverage
+        padding_x = int((x_max - x_min) * 0.1)  # 10% padding horizontally
+        padding_y = int((y_max - y_min) * 0.05)  # 5% padding vertically
+        
+        x_min = max(0, int(x_min - padding_x))
+        y_min = max(0, int(y_min - padding_y))
+        x_max = min(frame_width, int(x_max + padding_x))
+        y_max = min(frame_height, int(y_max + padding_y))
+        
+        return (x_min, y_min, x_max - x_min, y_max - y_min)
 
     """
     VisionSystem.detect_mood
